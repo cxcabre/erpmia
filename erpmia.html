@@ -278,7 +278,7 @@ textarea{min-height:96px;resize:vertical}
 <script>
 /* ============ CONFIG: URL del Web App y TOKEN ============ */
 const API_URL   = 'https://script.google.com/macros/s/AKfycbzIiFPdFMS81CTkxFqTBegvphQPI22KdRZkvyKj39n9WJMhUJAjl-dw4CTxZE2X8wBx-w/exec'; // ej: https://script.google.com/macros/s/XXX/exec
-const API_TOKEN = 'AKfycbzIiFPdFMS81CTkxFqTBegvphQPI22KdRZkvyKj39n9WJMhUJAjl-dw4CTxZE2X8wBx-w';         // mismo que en Apps Script
+const API_TOKEN = 'palabraclave';         // mismo que en Apps Script
 
 /* ===== Helpers de fecha y UI ===== */
 const ddmm = (d)=> String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0');
@@ -437,41 +437,95 @@ sugBox.addEventListener('click', e=>{
 
 /* Guardar hacia Sheets */
 el('guardar').addEventListener('click', async ()=>{
-  try{
-    if(tipoActual==='ingreso'){
-      const cliente=(inCliente.value||'').trim().toUpperCase();
-      const concepto=(selConcepto.value||'').trim().toUpperCase();
-      const descripcion=(inDetalleIng.value||'').trim().toUpperCase();
-      if(!cliente || !concepto) return;
+  try {
+    let rowsToSend = [];
 
-      const lines=[...document.querySelectorAll('.payline')].map(row=>{
-        return { medio:(row.querySelector('.pl-medio').value||'').toUpperCase(),
-                 monto:parseFloat(row.querySelector('.pl-monto').value) };
-      }).filter(x=>!isNaN(x.monto) && x.monto>0 && MEDIOS_INGRESO.includes(x.medio));
-      if(!lines.length) return;
+    if (tipoActual === 'ingreso') {
+      const cliente = (inCliente.value || '').trim().toUpperCase();
+      const concepto = (selConcepto.value || '').trim().toUpperCase();
+      const descripcion = (inDetalleIng.value || '').trim().toUpperCase();
+      if (!cliente || !concepto) {
+        alert('Cliente y concepto son obligatorios');
+        return;
+      }
 
-      const rows = lines.map(l=>({
-        fecha: ddmm(fechaSeleccionadaDate), cliente, concepto, descripcion,
-        monto: Math.abs(l.monto), medio: l.medio, tipo:'ingreso'
+      const lines = [...document.querySelectorAll('.payline')].map(row => ({
+        medio: (row.querySelector('.pl-medio').value || '').toUpperCase(),
+        monto: parseFloat(row.querySelector('.pl-monto').value)
+      })).filter(x => !isNaN(x.monto) && x.monto > 0);
+
+      if (!lines.length) {
+        alert('Ingresá al menos una forma de pago con monto.');
+        return;
+      }
+
+      rowsToSend = lines.map(l => ({
+        fecha: ddmm(fechaSeleccionadaDate),
+        cliente,
+        concepto,
+        descripcion,
+        monto: Math.abs(l.monto),
+        medio: l.medio,
+        tipo: 'ingreso'
       }));
-      await apiAddRows(rows);
-    }else{
-      const concepto=(selConceptoEg.value||'').toUpperCase();
-      const medio=(el('in-medio-eg').value||'').toUpperCase();
-      const monto=parseFloat(montoEg.value);
-      const descripcion=(inDescEg.value||'').trim().toUpperCase();
-      if(!concepto || isNaN(monto) || monto<=0 || !MEDIOS_EGRESO.includes(medio)) return;
-      const rows=[{
-        fecha: ddmm(fechaSeleccionadaDate), cliente:'', concepto, descripcion,
-        monto: -Math.abs(monto), medio: medio, tipo:'egreso'
+
+    } else {
+      const concepto = (selConceptoEg.value || '').toUpperCase();
+      const medio = (selMedioEg.value || '').toUpperCase();
+      const monto = parseFloat(montoEg.value);
+      const descripcion = (inDescEg.value || '').trim().toUpperCase();
+      if (!concepto || isNaN(monto) || monto <= 0) {
+        alert('Completá concepto y monto del egreso');
+        return;
+      }
+      rowsToSend = [{
+        fecha: ddmm(fechaSeleccionadaDate),
+        cliente: '',
+        concepto,
+        descripcion,
+        monto: -Math.abs(monto),
+        medio,
+        tipo: 'egreso'
       }];
-      await apiAddRows(rows);
     }
-    await syncFromSheet(); render(); actualizarArqueoVista(); closeModal();
-  }catch(ex){
-    alert('Error guardando: '+ex.message);
+
+    // acá hacemos el POST "a mano" para ver el error real
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        token: API_TOKEN,
+        action: 'add',
+        rows: rowsToSend
+      })
+    });
+
+    // si el servidor respondió pero no es 200
+    if (!res.ok) {
+      const txt = await res.text();
+      console.error('Respuesta NO OK del script:', txt);
+      alert('Error del servidor (HTTP ' + res.status + '): ' + txt);
+      return;
+    }
+
+    const data = await res.json();
+    if (!data.ok) {
+      console.error('Respuesta de la API:', data);
+      alert('El script respondió error: ' + (data.error || 'desconocido'));
+      return;
+    }
+
+    // si llegó acá, guardó bien
+    await syncFromSheet();
+    render();
+    actualizarArqueoVista();
+    closeModal();
+  } catch (err) {
+    console.error('Error en fetch:', err);
+    alert('Failed to fetch (el HTML no pudo hablar con el Script). Revisá:\n1. URL del Web App\n2. PUBLICADO como "cualquiera con el enlace"\n3. TOKEN igual en ambos lados\n4. Que no haya bloqueos del navegador.');
   }
 });
+
 
 /* ===== Tabla del día ===== */
 const tbody=el('tbody'); let visibleIndexMap=[];
@@ -571,32 +625,5 @@ sugBusq.addEventListener('click', async e=>{
 });
 document.addEventListener('click', e=>{ if(!sugBusq.contains(e.target) && e.target!==busqInput){ sugBusq.style.display='none'; }});
 </script>
-
-<!-- BOTÓN DE PRUEBA DE CONEXIÓN -->
-<div style="position:fixed;left:18px;bottom:18px;z-index:20">
-  <button id="btn-test-api" class="btn btn-primary" style="background:#2f4753;color:#fff;padding:12px 18px;border-radius:12px;font-weight:800">
-    🔄 Probar conexión
-  </button>
-</div>
-
-<script>
-document.getElementById('btn-test-api').addEventListener('click', async ()=>{
-  try {
-    const testUrl = `${API_URL}?action=list&fecha=01/01`; // prueba simple
-    const res = await fetch(testUrl, {method:'GET'});
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const data = await res.json();
-    if(data.ok){
-      alert('✅ Conexión exitosa con Google Sheets');
-    }else{
-      alert('⚠️ Error en respuesta del servidor: '+(data.error||''));
-    }
-  } catch (err) {
-    alert('❌ No se pudo conectar al Apps Script.\n\nVerificá que:\n1. La URL del API sea correcta.\n2. Está publicado como “Cualquiera con el enlace”.\n3. No tengas bloqueos CORS.');
-  }
-});
-</script>
-
-
 </body>
 </html>
